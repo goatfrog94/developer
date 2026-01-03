@@ -1,0 +1,911 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>부동산 개발 : 타이밍의 승부사</title>
+    
+    <!-- Tailwind CSS -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    
+    <!-- FontAwesome Icons -->
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+    
+    <!-- React & ReactDOM -->
+    <script crossorigin src="https://unpkg.com/react@18/umd/react.development.js"></script>
+    <script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.development.js"></script>
+    
+    <!-- Babel for JSX -->
+    <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+
+    <style>
+        body { font-family: 'Pretendard', -apple-system, BlinkMacSystemFont, system-ui, Roboto, sans-serif; }
+        .preserve-3d { transform-style: preserve-3d; }
+        @keyframes fade-in-up {
+            from { opacity: 0; transform: translateY(10px); }
+            to { opacity: 1; transform: translateY(0); }
+        }
+        .animate-fade-in-up { animation: fade-in-up 0.3s ease-out forwards; }
+        .no-scrollbar::-webkit-scrollbar { display: none; }
+        .no-scrollbar { -ms-overflow-style: none; scrollbar-width: none; }
+    </style>
+</head>
+<body class="bg-gray-950 text-white flex justify-center items-center min-h-screen overflow-hidden select-none">
+    <div id="root" class="w-full max-w-md h-full max-h-screen flex flex-col"></div>
+
+    <script type="text/babel">
+        const { useState, useEffect, useRef } = React;
+
+        // --- Constants & Data ---
+        const INITIAL_UNIT_COST = 3.0;
+        const MIN_RATE = 1.0; 
+        const MAX_RATE = 15.0; 
+        const CONSTRUCTION_DURATION = 36;
+        const START_AGE = 30;
+        const START_YEAR = 2010;
+        const END_YEAR = 2025;
+        const TOTAL_GAME_MONTHS = (END_YEAR - START_YEAR) * 12;
+        const MAX_ROUNDS = 5; 
+        const TICK_RATE = 500; 
+
+        const HISTORICAL_TRENDS = {
+            2010: { priceM: 0.9, rate: 4.5 }, 
+            2011: { priceM: 0.92, rate: 4.5 },
+            2012: { priceM: 0.88, rate: 4.0 }, 
+            2013: { priceM: 0.9, rate: 3.5 }, 
+            2014: { priceM: 1.0, rate: 3.0 }, 
+            2015: { priceM: 1.15, rate: 2.5 }, 
+            2016: { priceM: 1.25, rate: 2.25 },
+            2017: { priceM: 1.4, rate: 2.5 }, 
+            2018: { priceM: 1.6, rate: 2.75 }, 
+            2019: { priceM: 1.7, rate: 2.5 }, 
+            2020: { priceM: 2.0, rate: 1.0 }, 
+            2021: { priceM: 2.5, rate: 1.5 }, 
+            2022: { priceM: 2.2, rate: 5.0 }, 
+            2023: { priceM: 1.9, rate: 6.5 }, 
+            2024: { priceM: 2.0, rate: 5.0 }, 
+            2025: { priceM: 2.1, rate: 4.0 }, 
+        };
+
+        const NPC_EVENTS = [
+            { trigger: (s) => s.gameState === 'idle', speaker: "김 비서", role: "일잘러", msg: "사장님, 다음 사업지는 어디로 할까요? 강남? 판교? 아니면 화성?", icon: "fa-user-clock", color: "text-pink-300", chance: 0.05 },
+            { trigger: (s) => s.marketRate > 8.0, speaker: "이 재무이사", role: "걱정인형", msg: "사장님! 금리가 미쳤습니다! 이러다 회사 사옥 팔아야 합니다 ㅠㅠ", icon: "fa-chart-line", color: "text-red-300", chance: 0.08 },
+            { trigger: (s) => s.gameState === 'under_construction' && s.marketPrice > s.fixedSalesPrice * 1.3, speaker: "오 홍보팀", role: "신남", msg: "사장님! 우리 아파트가 '로또 청약'이래요! 경쟁률 1000:1 예상합니다!", icon: "fa-face-laugh-squint", color: "text-orange-300", chance: 0.15 },
+            { trigger: (s) => s.gameState === 'under_construction' && s.marketPrice < s.fixedSalesPrice * 0.85, speaker: "현장 소장", role: "현실적", msg: "분위기 안 좋습니다. 마피 1억에도 안 팔린답니다. 공사 멈출까요?", icon: "fa-helmet-safety", color: "text-gray-300", chance: 0.15 },
+            { speaker: "박 대리", role: "MZ세대", msg: "사장님, 저 오늘 조퇴 좀... 코인 떡락해서 멘탈 나갔습니다.", icon: "fa-bitcoin-sign", color: "text-yellow-500", chance: 0.05 },
+            { speaker: "건물주", role: "갓물주", msg: "월세 밀린 거 알고 있지? 보증금에서 깐다?", icon: "fa-key", color: "text-green-400", chance: 0.05 },
+        ];
+
+        const RealEstateTycoon = () => {
+            // --- Game Flow ---
+            const [gameState, setGameState] = useState('intro');
+            const [gameSpeed, setGameSpeed] = useState(1);
+            const [round, setRound] = useState(1);
+            const [month, setMonth] = useState(0); 
+            const [projectMonth, setProjectMonth] = useState(0); 
+
+            // --- Project Variables ---
+            const [totalUnits, setTotalUnits] = useState(100);
+            const [projectCost, setProjectCost] = useState(300);
+            const [totalLoanAmount, setTotalLoanAmount] = useState(270);
+            const [fixedSalesPrice, setFixedSalesPrice] = useState(0); 
+            const [activeLoan, setActiveLoan] = useState(0); 
+            const [salesBoostLeft, setSalesBoostLeft] = useState(0); 
+
+            // Cost Trackers
+            const [landCostPerUnit, setLandCostPerUnit] = useState(1.0); 
+            const [constCostPerUnit, setConstCostPerUnit] = useState(2.0); 
+
+            // --- Economy & Market ---
+            const [marketRate, setMarketRate] = useState(4.5); 
+            const [marketPrice, setMarketPrice] = useState(2.5); 
+            const [prevMarketPrice, setPrevMarketPrice] = useState(2.5); 
+            const [peakPrice, setPeakPrice] = useState(2.5);
+            const [priceMomentum, setPriceMomentum] = useState(0); 
+            const [fixedInterestRate, setFixedInterestRate] = useState(0); 
+
+            // --- News & Events ---
+            const [currentNews, setCurrentNews] = useState(null); 
+            const [npcMessage, setNpcMessage] = useState(null); 
+            const [pendingEvents, setPendingEvents] = useState([]); 
+            const [warningMsg, setWarningMsg] = useState(null);
+
+            // --- Player Status ---
+            const [cash, setCash] = useState(70); 
+            const [totalRevenue, setTotalRevenue] = useState(0);
+            const [unsoldUnits, setUnsoldUnits] = useState(100);
+            const [soldUnits, setSoldUnits] = useState(0);
+            
+            const [history, setHistory] = useState([]); 
+            const [logs, setLogs] = useState([]);
+
+            // --- Leaderboard ---
+            const [leaderboard, setLeaderboard] = useState([]);
+            const [playerName, setPlayerName] = useState("");
+            const [scoreSubmitted, setScoreSubmitted] = useState(false);
+
+            // --- Effects ---
+            const fetchLeaderboard = () => {
+                const stored = localStorage.getItem('tycoon_leaderboard');
+                if (stored) {
+                    const parsed = JSON.parse(stored);
+                    parsed.sort((a, b) => b.score - a.score);
+                    setLeaderboard(parsed.slice(0, 10));
+                }
+            };
+
+            useEffect(() => {
+                if (['ended', 'bankrupt', 'time_limit', 'retired'].includes(gameState)) {
+                    fetchLeaderboard();
+                }
+            }, [gameState]);
+
+            // --- Helpers ---
+            const triggerNpcMessage = (speaker, role, msg, icon="fa-comment", color="text-white") => {
+                setNpcMessage(null);
+                setTimeout(() => {
+                    setNpcMessage({ speaker, role, msg, icon, color, expireMonth: month + 6 });
+                }, 50);
+            };
+
+            const getNews = (rate, price, landCost) => {
+                const isHighRate = rate > 6.0;
+                const isLowRate = rate < 3.0;
+                const isCrash = price < landCost * 1.5; 
+
+                const scenarios = [];
+                if (isHighRate) {
+                    scenarios.push({ type: 'PRICE', impact: -0.5, delay: 2, msg: "이자 폭탄! '영끌족' 비명... 경매 물건 급증", bad: true });
+                    scenarios.push({ type: 'PRICE', impact: -0.3, delay: 1, msg: "건설사 자금난, 'PF 대출' 연장 거부 속출", bad: true });
+                }
+                if (isLowRate) {
+                    scenarios.push({ type: 'PRICE', impact: 0.6, delay: 3, msg: "'자고 일어나면 1억?' 전국 부동산 불장", bad: false });
+                    scenarios.push({ type: 'RATE', impact: 0.5, delay: 4, msg: "가계 부채 경고등! 한은, 금리 인상 만지작", bad: true });
+                }
+                scenarios.push({ type: 'PRICE', impact: 0.3, delay: 3, msg: "GTX 노선 확정! 인근 단지 호가 껑충", bad: false });
+                scenarios.push({ type: 'PRICE', impact: -0.4, delay: 2, msg: "단지 내 대형 싱크홀 발생! 부실 공사 의혹", bad: true });
+                scenarios.push({ type: 'RATE', impact: -0.2, delay: 1, msg: "정부 '주거 안정' 위해 대출 규제 완화", bad: false });
+                return scenarios[Math.floor(Math.random() * scenarios.length)];
+            };
+
+            const yearsPassed = Math.floor(month / 12);
+            const currentYear = START_YEAR + yearsPassed;
+            const currentMonthDisplay = (month % 12) + 1;
+            const inflationFactor = Math.pow(1.002, month); 
+
+            const formatMoney = (amount) => {
+                if (amount === undefined || amount === null) return "0";
+                const absAmount = Math.abs(amount);
+                if (absAmount >= 10000) {
+                    const jo = Math.floor(absAmount / 10000);
+                    const eok = Math.floor(absAmount % 10000);
+                    return `${jo}조${eok > 0 ? eok.toFixed(0) : ''}억`;
+                }
+                return `${absAmount.toFixed(0)}억`;
+            };
+
+            const formatPrice = (amount) => amount.toFixed(1) + "억원";
+            const formatUnitCost = (amount) => `세대당 ${amount.toFixed(1)}억`;
+
+            const getComment = (cash) => {
+                if (cash < 0) return "야반도주 준비하셨나요?";
+                if (cash < 100) return "전세금 빼서 시작했는데...";
+                if (cash < 500) return "이제 밥값은 하고 사네요.";
+                if (cash < 2000) return "성공한 사업가! 골프 치러 가시죠.";
+                return "당신은 부동산의 전설입니다.";
+            };
+
+            const getFinalResult = (cash) => {
+                const score = Math.floor(cash);
+                let title = "";
+                let desc = "";
+                let color = "";
+
+                if (score < -500) {
+                    title = "전설의 신용불량자";
+                    const descs = [
+                        "전생에 나라를 팔아먹으셨나요? 빚이 감당 불가입니다.",
+                        "은행 블랙리스트 명예의 전당 1위 등극.",
+                        "신체 포기 각서 쓰러 가시죠...",
+                        "다음 생에는 돌멩이로 태어나세요."
+                    ];
+                    desc = descs[Math.floor(Math.random() * descs.length)];
+                    color = "text-red-600";
+                } else if (score < 0) {
+                    title = "야반도주 전문가";
+                    const descs = [
+                        "한강 물 온도가 따뜻해 보이네요...",
+                        "여권 챙기세요. 배 타고 밀항합시다.",
+                        "빚쟁이들이 집 앞에 텐트 쳤습니다.",
+                        "마이너스의 손! 닿는 것마다 망하네요."
+                    ];
+                    desc = descs[Math.floor(Math.random() * descs.length)];
+                    color = "text-red-500";
+                } else if (score < 100) {
+                    title = "편의점 도시락 매니아";
+                    const descs = [
+                        "전세금 빼서 시작했는데 원룸 보증금만 남았네요.",
+                        "그래도 빚은 없으니 다행...일까요?",
+                        "폐지 줍는 리어카 하나 장만하셔야겠습니다.",
+                        "15년 동안 숨만 쉬고 일했는데 남은 게 없네요."
+                    ];
+                    desc = descs[Math.floor(Math.random() * descs.length)];
+                    color = "text-gray-400";
+                } else if (score < 300) {
+                    title = "서민의 삶";
+                    const descs = [
+                        "딱 입에 풀칠할 정도입니다. 고생하셨습니다.",
+                        "치킨 시킬 때 배달비 고민은 해야 합니다.",
+                        "서울 아파트는 꿈도 못 꾸고 빌라 전세 정도?",
+                        "열심히 사셨는데... 티가 안 나네요."
+                    ];
+                    desc = descs[Math.floor(Math.random() * descs.length)];
+                    color = "text-gray-300";
+                } else if (score < 500) {
+                    title = "동네 유지";
+                    const descs = [
+                        "나쁘지 않아요. 동네에서 '사장님' 소리는 듣겠네요.",
+                        "그랜저 정도는 뽑을 수 있겠습니다.",
+                        "노후 걱정은 덜었지만 자식한테 물려줄 건 없네요.",
+                        "평범하게 성공한 삶. 박수 짝짝짝."
+                    ];
+                    desc = descs[Math.floor(Math.random() * descs.length)];
+                    color = "text-green-400";
+                } else if (score < 1000) {
+                    title = "성공한 중산층";
+                    const descs = [
+                        "이제 백화점 가격표 안 보고 사셔도 됩니다.",
+                        "외제차 매장 가서 '이거 줘' 시전 가능.",
+                        "주변에서 돈 빌려달라는 연락 좀 오겠는데요?",
+                        "강남 입성은 힘들어도 마용성은 가능합니다."
+                    ];
+                    desc = descs[Math.floor(Math.random() * descs.length)];
+                    color = "text-green-300";
+                } else if (score < 3000) {
+                    title = "강남 건물주";
+                    const descs = [
+                        "성공한 사업가! 골프 회원권 지르시죠.",
+                        "숨만 쉬어도 월세가 들어오는 삶.",
+                        "당신의 성공 스토리, 책으로 내도 되겠습니다.",
+                        "자식들이 효도 경쟁을 시작했습니다."
+                    ];
+                    desc = descs[Math.floor(Math.random() * descs.length)];
+                    color = "text-blue-400";
+                } else if (score < 5000) {
+                    title = "대한민국 큰손";
+                    const descs = [
+                        "재벌 3세도 당신 앞에선 고개를 숙입니다.",
+                        "뉴스 경제면에 자주 나오시겠군요.",
+                        "돈으로 따귀를 때려도 합법일 것 같습니다 (농담).",
+                        "세무조사 조심하세요. 너무 많이 벌었습니다."
+                    ];
+                    desc = descs[Math.floor(Math.random() * descs.length)];
+                    color = "text-purple-400";
+                } else if (score < 10000) {
+                    title = "살아있는 전설";
+                    const descs = [
+                        "걸어 다니는 대기업. 당신이 곧 경제입니다.",
+                        "청와대에서 밥 먹자고 연락 오겠는데요?",
+                        "돈을 세다가 지문이 닳아 없어졌습니다.",
+                        "한국 부동산은 당신 손바닥 안에 있습니다."
+                    ];
+                    desc = descs[Math.floor(Math.random() * descs.length)];
+                    color = "text-yellow-400";
+                } else {
+                    title = "지구 정복자";
+                    const descs = [
+                        "화성 갈끄니까~ 일론 머스크와 맞짱 가능.",
+                        "이 정도면 나라 하나 세우시죠.",
+                        "돈으로 건물을 닦고, 돈으로 불을 때세요.",
+                        "게임의 신! 개발자가 무릎 꿇었습니다."
+                    ];
+                    desc = descs[Math.floor(Math.random() * descs.length)];
+                    color = "text-yellow-300";
+                }
+
+                return { title, desc, color };
+            };
+
+            const getTitle = (finalScore) => {
+                const res = getFinalResult(finalScore);
+                return { title: res.title };
+            };
+
+            const addLog = (msg) => {
+                const currentY = START_YEAR + Math.floor(month / 12);
+                const currentM = (month % 12) + 1;
+                setLogs(prev => [`[${currentY}.${currentM}] ${msg}`, ...prev].slice(0, 3)); 
+            };
+
+            const submitScore = () => {
+                if (!playerName.trim() || scoreSubmitted) return;
+                const result = getFinalResult(cash);
+                const newEntry = {
+                    name: playerName.trim().substring(0, 8),
+                    score: Math.floor(cash),
+                    title: result.title,
+                    timestamp: Date.now()
+                };
+                const currentLeaderboard = JSON.parse(localStorage.getItem('tycoon_leaderboard') || '[]');
+                const updated = [...currentLeaderboard, newEntry];
+                updated.sort((a, b) => b.score - a.score);
+                localStorage.setItem('tycoon_leaderboard', JSON.stringify(updated));
+                setLeaderboard(updated.slice(0, 10));
+                setScoreSubmitted(true);
+            };
+
+            // --- Game Loop ---
+            useEffect(() => {
+                let interval = null;
+                if ((gameState !== 'intro' && gameState !== 'ended' && gameState !== 'bankrupt' && gameState !== 'time_limit' && gameState !== 'retired' && gameState !== 'round_summary') && gameSpeed > 0) {
+                    interval = setInterval(() => {
+                        tick();
+                    }, TICK_RATE);
+                }
+                return () => clearInterval(interval);
+            }, [gameState, gameSpeed, month, marketRate, marketPrice, priceMomentum, activeLoan, cash, pendingEvents, landCostPerUnit, constCostPerUnit, totalUnits, fixedSalesPrice, peakPrice, salesBoostLeft]);
+
+            const tick = () => {
+                const nextMonth = month + 1;
+                const nextYearVal = START_YEAR + Math.floor(nextMonth / 12);
+                
+                if (nextMonth >= TOTAL_GAME_MONTHS) {
+                    setMonth(nextMonth);
+                    setGameState('time_limit');
+                    return;
+                }
+
+                setMonth(nextMonth);
+                
+                // NPC & News
+                if (currentNews && currentNews.expireMonth <= nextMonth) setCurrentNews(null);
+                if (npcMessage && npcMessage.expireMonth <= nextMonth) setNpcMessage(null);
+
+                if (Math.random() < 0.15 && !npcMessage) {
+                    const currentState = { marketRate, marketPrice, cash, debt: activeLoan, gameState, landCostPerUnit, projectMonth, fixedSalesPrice, soldUnits, unsoldUnits, salesBoostLeft };
+                    // Simplified trigger check for robustness
+                    const possibleEvents = NPC_EVENTS.filter(e => !e.trigger || e.trigger(currentState));
+                    if (possibleEvents.length > 0) {
+                        const event = possibleEvents[Math.floor(Math.random() * possibleEvents.length)];
+                        if (Math.random() < (event.chance || 0.1) * 2) {
+                            triggerNpcMessage(event.speaker, event.role, event.msg, event.icon, event.color);
+                        }
+                    }
+                }
+
+                if (Math.random() < 0.04 && pendingEvents.length < 1) { 
+                    const newsItem = getNews(marketRate, marketPrice, landCostPerUnit);
+                    const triggerMonth = nextMonth + newsItem.delay;
+                    setPendingEvents(prev => [...prev, { ...newsItem, triggerMonth }]);
+                    setCurrentNews({ msg: `[속보] ${newsItem.msg}`, bad: newsItem.bad, expireMonth: nextMonth + 3 });
+                    addLog(`📢 속보: ${newsItem.msg}`);
+                }
+
+                let forcedRateChange = 0;
+                let forcedMomentumChange = 0;
+                const triggeredEvents = pendingEvents.filter(e => e.triggerMonth === nextMonth);
+                const remainingEvents = pendingEvents.filter(e => e.triggerMonth !== nextMonth);
+                if (triggeredEvents.length > 0) {
+                    triggeredEvents.forEach(e => {
+                        const impact = e.type === 'PRICE' ? e.impact * inflationFactor : e.impact;
+                        if (e.type === 'RATE') forcedRateChange += impact;
+                        else if (e.type === 'PRICE') forcedMomentumChange += impact * 0.2;
+                        addLog(`📰 뉴스 반영: ${e.msg}`);
+                    });
+                    setPendingEvents(remainingEvents);
+                }
+                
+                // Market Logic
+                const histData = HISTORICAL_TRENDS[nextYearVal] || { priceM: 1.8, rate: 4.0 };
+                const targetBasePrice = 3.0 * histData.priceM * inflationFactor;
+                
+                let nextMomentum = priceMomentum * 0.92; 
+                const priceGap = (targetBasePrice - marketPrice) / marketPrice;
+                nextMomentum += priceGap * 0.03; 
+                nextMomentum += (Math.random() - 0.5) * 0.04 + forcedMomentumChange;
+                const inflationDrift = 0.002; 
+                let nextPrice = marketPrice * (1 + nextMomentum + inflationDrift);
+                
+                if (nextPrice < 1.0) nextPrice = 1.0; 
+                
+                if (nextPrice > peakPrice) setPeakPrice(nextPrice);
+                else {
+                    const minAllowed = peakPrice * 0.7; 
+                    if (nextPrice < minAllowed) {
+                        nextPrice = minAllowed + (Math.random() * 0.01);
+                        nextMomentum += 0.01;
+                    }
+                }
+
+                setPriceMomentum(nextMomentum);
+                setPrevMarketPrice(marketPrice);
+                setMarketPrice(parseFloat(nextPrice.toFixed(2)));
+
+                const priceChangeRatio = (nextPrice - marketPrice) / marketPrice;
+                let landChange = 0;
+                if (priceChangeRatio > 0) landChange = priceChangeRatio * 0.7; 
+                else landChange = priceChangeRatio * 0.5; 
+                const nextLandCost = landCostPerUnit * (1 + landChange + 0.001); 
+                setLandCostPerUnit(parseFloat(nextLandCost.toFixed(2)));
+                setConstCostPerUnit(prev => parseFloat((prev * 1.002).toFixed(2)));
+
+                const targetRate = histData.rate;
+                let rateDiff = targetRate - marketRate;
+                let nextRate = marketRate + (rateDiff * 0.08) + ((Math.random() - 0.5) * 0.3) + forcedRateChange;
+                if (nextRate < MIN_RATE) nextRate = MIN_RATE;
+                if (nextRate > MAX_RATE) nextRate = MAX_RATE; 
+                setMarketRate(parseFloat(nextRate.toFixed(2)));
+
+                setWarningMsg(null); 
+
+                // Game State
+                if (gameState === 'land_owned') {
+                    const monthlyInterest = (activeLoan * (fixedInterestRate / 100)) / 12;
+                    setCash(prev => parseFloat((prev - monthlyInterest).toFixed(2)));
+                    if (cash < -20) { setGameState('bankrupt'); return; }
+                }
+
+                if (gameState === 'under_construction') {
+                    const currentP = projectMonth + 1;
+                    setProjectMonth(currentP);
+                    
+                    const monthlyInterest = (activeLoan * (fixedInterestRate / 100)) / 12;
+                    let revenue = 0;
+                    let sold = 0;
+
+                    if (unsoldUnits > 0) {
+                        let baseSalesRate = 0;
+                        if (currentP <= 6) baseSalesRate = 0.05; 
+                        else if (currentP <= 24) baseSalesRate = 0.02; 
+                        else baseSalesRate = 0.01; 
+
+                        const priceRatio = marketPrice / fixedSalesPrice; 
+                        let marketFactor = 1.0;
+                        if (priceRatio >= 1.0) {
+                            marketFactor = Math.pow(priceRatio, 12); 
+                        } else {
+                            if (priceRatio < 0.85) {
+                                marketFactor = 0; 
+                                setWarningMsg("⛔ 시세 폭락! 분양 중단");
+                            } else {
+                                marketFactor = Math.pow(priceRatio, 20); 
+                            }
+                        }
+
+                        if (salesBoostLeft > 0) {
+                            marketFactor = Math.max(marketFactor * 3.0, 0.5); 
+                            setSalesBoostLeft(prev => prev - 1);
+                        }
+
+                        let salesVolume = Math.floor(totalUnits * baseSalesRate * marketFactor);
+                        salesVolume = Math.min(salesVolume, unsoldUnits);
+
+                        if (salesVolume > 0) {
+                            revenue = salesVolume * fixedSalesPrice;
+                            sold = salesVolume;
+                            setUnsoldUnits(prev => prev - sold);
+                            setSoldUnits(prev => prev + sold);
+                            setTotalRevenue(prev => parseFloat((prev + revenue).toFixed(2)));
+                            
+                            if(salesVolume > totalUnits * 0.05 && Math.random() < 0.2) {
+                                triggerNpcMessage("정 분양팀장", "영업왕", "전화기 폭발합니다! 지금 물 들어왔습니다!", "fa-thumbs-up", "text-green-300");
+                            }
+                        }
+                    }
+
+                    setCash(prev => {
+                        let nextCash = prev - monthlyInterest + revenue;
+                        let currentLoan = activeLoan; 
+                        const reserve = Math.max(10, monthlyInterest * 12);
+                        let repayment = 0;
+
+                        if (currentLoan > 0 && nextCash > reserve) {
+                            repayment = Math.min(nextCash - reserve, currentLoan);
+                            nextCash -= repayment;
+                        }
+                        
+                        if (repayment > 0) {
+                            setActiveLoan(prevLoan => parseFloat((prevLoan - repayment).toFixed(2)));
+                            if (repayment > 10) addLog(`💸 자동 상환: ${formatMoney(repayment)}`);
+                        }
+
+                        if (nextCash < monthlyInterest * 6 && unsoldUnits > 0) {
+                            setWarningMsg("⚠️ 자금 고갈 위험! 파산 직전!");
+                        }
+                        return parseFloat(nextCash.toFixed(2));
+                    });
+
+                    if (cash < -50) { setGameState('bankrupt'); return; }
+
+                    if (unsoldUnits - sold === 0 && currentP < CONSTRUCTION_DURATION) endRound("sold_out");
+                    else if (currentP >= CONSTRUCTION_DURATION) endRound("time_over");
+                }
+
+                // History (Zoom out)
+                setHistory(prev => [...prev, { month: nextMonth, rate: nextRate, price: nextPrice }]);
+            };
+
+            // --- Actions ---
+            const initGame = () => {
+                setRound(1); setCash(70); setTotalUnits(100); setProjectCost(300); setTotalLoanAmount(270);
+                setLandCostPerUnit(1.0); setConstCostPerUnit(2.0); setMarketPrice(2.5); setMarketRate(4.5);
+                setPriceMomentum(0); setPeakPrice(2.5); setActiveLoan(0); setSalesBoostLeft(0);
+                setHistory([]); setLogs([]); setPendingEvents([]); setCurrentNews(null); setNpcMessage(null); setWarningMsg(null);
+                setMonth(0); setGameState('idle'); setScoreSubmitted(false); setPlayerName("");
+                addLog("게임 시작! 2000년, 기회의 땅.");
+            };
+
+            const buyLand = () => {
+                if (gameState !== 'idle') return;
+                const landLoan = totalLoanAmount * 0.3; 
+                setActiveLoan(landLoan);
+                setFixedInterestRate(marketRate); 
+                setGameState('land_owned');
+                addLog(`🚩 토지 매입 (대출 ${formatMoney(landLoan)})`);
+                triggerNpcMessage("김 비서", "일잘러", "토지 계약 완료! 이제 이자 나가니까 빨리 착공하시죠.", "fa-file-signature", "text-blue-300");
+            };
+
+            const startSales = () => {
+                if (gameState !== 'land_owned') return;
+                const constructionLoan = totalLoanAmount * 0.7; 
+                setActiveLoan(prev => prev + constructionLoan);
+                setFixedSalesPrice(marketPrice); 
+                setProjectMonth(0);
+                setUnsoldUnits(totalUnits);
+                setSoldUnits(0);
+                setGameState('under_construction');
+                addLog(`🏗️ 착공 (분양가 ${formatMoney(marketPrice)})`);
+                triggerNpcMessage("박 기획팀장", "설레발", "모델하우스 오픈! 화환이 100개나 들어왔습니다!", "fa-ribbon", "text-pink-300");
+            };
+
+            const boostSales = () => {
+                if (gameState !== 'under_construction' || unsoldUnits <= 0) return;
+                const costPerUnit = 0.1; 
+                const totalBoostCost = unsoldUnits * costPerUnit;
+                if (cash < totalBoostCost) {
+                    addLog("⚠️ 현금이 부족합니다.");
+                    return;
+                }
+                setCash(prev => parseFloat((prev - totalBoostCost).toFixed(2)));
+                setSalesBoostLeft(3); 
+                addLog(`📣 조직분양 투입!`);
+                triggerNpcMessage("최 마케팅", "열혈", "걱정 마십쇼! 제가 영혼까지 끌어모아 팔아보겠습니다!", "fa-bullhorn", "text-yellow-400");
+            };
+
+            const endRound = (reason) => {
+                setGameState('round_summary');
+                setNpcMessage(null); setWarningMsg(null); setSalesBoostLeft(0);
+                let liquidationValue = 0;
+                if (unsoldUnits > 0) {
+                    const dumpPrice = marketPrice * 0.8;
+                    liquidationValue = unsoldUnits * dumpPrice; 
+                    addLog(`📉 미분양 떨이 처분`);
+                    triggerNpcMessage("이 재무이사", "울상", "미분양 털어냈습니다... 제 성과급은 없겠죠?", "fa-face-sad-tear", "text-gray-400");
+                } else {
+                    addLog(`🎉 완판 달성!`);
+                    triggerNpcMessage("전 직원", "환호", "와아아!!! 완판이다!! 사장님 만세!!", "fa-champagne-glasses", "text-yellow-300");
+                }
+                setCash(prevCash => parseFloat((prevCash + liquidationValue - activeLoan).toFixed(2)));
+                setActiveLoan(0);
+            };
+
+            const startNextRound = () => {
+                const nextRound = round + 1;
+                setRound(nextRound);
+                
+                const nextUnitCost = landCostPerUnit + constCostPerUnit;
+                const safeCash = Math.max(cash, 10); 
+                const multiplier = 8; 
+                
+                const nextTotalBudget = Math.floor(safeCash * multiplier); 
+                
+                let nextTotalUnits = Math.floor(nextTotalBudget / nextUnitCost);
+                if (nextTotalUnits < 100) nextTotalUnits = 100;
+                if (nextTotalUnits > 10000) nextTotalUnits = 10000;
+
+                const nextProjectCost = Math.floor(nextTotalUnits * nextUnitCost);
+                const nextLoanAmount = Math.floor(nextProjectCost * 0.9); 
+                
+                setTotalUnits(nextTotalUnits); setProjectCost(nextProjectCost); setTotalLoanAmount(nextLoanAmount);
+                setActiveLoan(0); setUnsoldUnits(nextTotalUnits); setSoldUnits(0); setTotalRevenue(0); setProjectMonth(0);
+                setGameState('idle'); setLogs([]);
+                addLog(`라운드 ${nextRound} 시작.`);
+            };
+
+            const currentResult = getFinalResult(cash);
+
+            // --- UI Components ---
+            const SalesProgressBar = ({ total, sold }) => {
+                const percentage = Math.round((sold / total) * 100);
+                return (
+                    <div className="w-full mt-2">
+                        <div className="flex justify-between text-xs mb-1 text-gray-400">
+                            <span>분양률</span>
+                            <span className="text-white font-bold">{percentage}% ({sold}/{total}세대)</span>
+                        </div>
+                        <div className="w-full h-4 bg-gray-700 rounded-full overflow-hidden relative shadow-inner">
+                            <div className="h-full bg-gradient-to-r from-blue-500 to-cyan-400 transition-all duration-300 flex items-center justify-center text-[10px] font-bold text-white shadow-[0_0_10px_rgba(59,130,246,0.5)]" style={{ width: `${Math.max(percentage, 5)}%` }}>
+                                {percentage}%
+                            </div>
+                        </div>
+                    </div>
+                );
+            };
+
+            const ProgressBar = ({ current, total, color="bg-blue-500", label="" }) => {
+                const percentage = Math.min(100, Math.round((current / total) * 100));
+                return (
+                    <div className="w-full mt-2">
+                        <div className="flex justify-between text-xs mb-1 text-gray-400">
+                            <span>{label}</span>
+                            <span className="text-white font-bold">{percentage}%</span>
+                        </div>
+                        <div className="w-full h-4 bg-gray-700 rounded-full overflow-hidden relative shadow-inner">
+                            <div className={`h-full ${color} transition-all duration-300`} style={{ width: `${percentage}%` }}></div>
+                        </div>
+                    </div>
+                );
+            };
+
+            const SmoothLineChart = ({ data }) => {
+                if (!data || data.length < 2) return <div className="h-28 flex items-center justify-center bg-gray-900 text-gray-500 text-xs">데이터 수집 중...</div>;
+                const width = 100; const height = 50;
+                
+                const prices = data.map(d => d.price);
+                // Zoom out scale logic
+                let minP = Math.min(...prices, 2.0) * 0.8;
+                let maxP = Math.max(...prices, 5.0) * 1.1;
+
+                const getPath = (key, minVal, maxVal) => {
+                    const points = data.map((d, i) => {
+                        // Zoom out: Map entire history to width
+                        const x = (i / (data.length - 1 || 1)) * width;
+                        const val = d[key] !== undefined ? d[key] : minVal;
+                        const y = height - ((val - minVal) / (maxVal - minVal)) * height;
+                        return [x, y];
+                    });
+                    if (points.length === 0) return "";
+                    let d = `M ${points[0][0]},${points[0][1]}`;
+                    for (let i = 0; i < points.length - 1; i++) {
+                        const x0 = points[i][0]; const y0 = points[i][1];
+                        const x1 = points[i + 1][0]; const y1 = points[i + 1][1];
+                        const cp1x = (x0 + x1) / 2; const cp1y = y0;
+                        const cp2x = (x0 + x1) / 2; const cp2y = y1;
+                        d += ` C ${cp1x},${cp1y} ${cp2x},${cp2y} ${x1},${y1}`;
+                    }
+                    return d;
+                };
+
+                return (
+                    <div className="relative w-full h-28 bg-gray-900 rounded border border-gray-700 overflow-hidden">
+                        <svg viewBox={`0 0 ${width} ${height}`} className="w-full h-full preserve-3d">
+                            <line x1="0" y1={height/2} x2={width} y2={height/2} stroke="#333" strokeWidth="0.5" strokeDasharray="2" />
+                            <path d={getPath('rate', 0, 15)} fill="none" stroke="#ef4444" strokeWidth="1" opacity="0.6"/>
+                            <path d={getPath('price', minP, maxP)} fill="none" stroke="#22c55e" strokeWidth="1.5" />
+                        </svg>
+                        <div className="absolute top-0.5 left-1 text-[9px] text-green-400 font-bold">아파트 35평 시세</div>
+                        <div className="absolute bottom-0.5 left-1 text-[9px] text-red-400 font-bold">대출금리</div>
+                    </div>
+                );
+            };
+
+            // --- Render ---
+            return (
+                <div className="w-full h-full bg-gray-800 shadow-xl overflow-hidden relative flex flex-col font-sans">
+                    
+                    {/* Header */}
+                    <div className="bg-gray-900 border-b border-gray-700 shrink-0 p-3 flex justify-between items-center h-14">
+                        <div>
+                            <h1 className="text-base font-bold text-yellow-500 flex items-center gap-1"><i className="fa-solid fa-building"></i> 부동산 개발 : 타이밍의 승부사</h1>
+                            <div className="flex gap-3 text-xs text-gray-400 mt-0.5">
+                                <span>R{round}</span>
+                                <span className="flex items-center gap-1"><i className="fa-regular fa-clock"></i> {currentYear}.{currentMonthDisplay}</span>
+                            </div>
+                        </div>
+                        <div className="flex gap-2 items-center">
+                            {warningMsg && <span className="text-xs text-red-500 font-bold animate-pulse">{warningMsg}</span>}
+                            <button onClick={() => setGameSpeed(prev => prev === 0 ? 1 : 0)} className="w-8 h-8 bg-gray-700 rounded flex items-center justify-center text-sm hover:bg-gray-600 transition-colors">
+                                <i className={`fa-solid ${gameSpeed === 0 ? 'fa-play' : 'fa-pause'}`}></i>
+                            </button>
+                        </div>
+                    </div>
+
+                    {/* NPC Message */}
+                    <div className="h-16 bg-gray-800 border-b border-gray-700 p-2 flex items-center gap-3 relative overflow-hidden shrink-0">
+                        {npcMessage ? (
+                            <>
+                                <div className={`w-10 h-10 rounded-full flex items-center justify-center shrink-0 border-2 ${npcMessage.color || 'text-white'} bg-gray-700 text-lg`}>
+                                    <i className={`fa-solid ${npcMessage.icon || 'fa-user'}`}></i>
+                                </div>
+                                <div className="flex-1 animate-fade-in-up overflow-hidden">
+                                    <div className="flex items-center gap-1.5 mb-0.5">
+                                        <span className="font-bold text-yellow-400 text-xs">{npcMessage.speaker}</span>
+                                        <span className="text-[10px] text-gray-400 px-1.5 py-0.5 bg-gray-900 rounded-full">{npcMessage.role}</span>
+                                    </div>
+                                    <p className="text-xs text-white leading-tight">"{npcMessage.msg}"</p>
+                                </div>
+                            </>
+                        ) : (
+                            <div className="w-full text-center text-gray-500 text-xs italic">(사무실이 조용합니다...)</div>
+                        )}
+                    </div>
+
+                    {/* Content */}
+                    <div className="flex-1 overflow-y-auto no-scrollbar p-3 space-y-3 relative">
+                        
+                        {gameState === 'intro' && (
+                            <div className="absolute inset-0 z-50 bg-gray-900/95 flex flex-col items-center justify-center p-6 text-center">
+                                <h1 className="text-2xl font-bold text-yellow-500 mb-4">부동산 개발 : 타이밍의 승부사</h1>
+                                <p className="text-sm text-gray-300 mb-8 leading-relaxed">
+                                    2010년 ~ 2025년, 격동의 15년.<br/>
+                                    금리를 읽고, 시세를 예측하여<br/>
+                                    대한민국 최고의 디벨로퍼가 되세요.
+                                </p>
+                                <button onClick={initGame} className="px-8 py-3 bg-blue-600 hover:bg-blue-500 rounded-lg text-base font-bold animate-pulse shadow-lg transition-transform active:scale-95">게임 시작</button>
+                                <div className="absolute bottom-5 right-5 text-xs text-gray-600">만든이: 권영태</div>
+                            </div>
+                        )}
+                        {gameState === 'round_summary' && (
+                            <div className="absolute inset-0 z-50 bg-gray-900/95 flex flex-col items-center justify-center p-6 text-center">
+                                <h2 className="text-xl font-bold text-white mb-2">Round {round} 종료</h2>
+                                <p className="text-3xl font-bold text-green-400 mb-4">{formatMoney(cash)}</p>
+                                <div className="bg-gray-800 p-4 rounded-lg w-full mb-6 border border-gray-700">
+                                    <p className="text-sm text-yellow-300 italic">"{getFinalResult(cash).desc}"</p>
+                                </div>
+                                {currentYear < END_YEAR ? (
+                                    <button onClick={startNextRound} className="px-8 py-3 bg-green-600 hover:bg-green-500 rounded-lg text-base font-bold shadow-lg">다음 라운드</button>
+                                ) : (
+                                    <button onClick={() => setGameState('time_limit')} className="px-8 py-3 bg-yellow-600 hover:bg-yellow-500 rounded-lg text-base font-bold shadow-lg">최종 결과</button>
+                                )}
+                            </div>
+                        )}
+                        {['ended', 'bankrupt', 'time_limit', 'retired'].includes(gameState) && gameState !== 'intro' && (
+                            <div className="absolute inset-0 z-50 bg-gray-900/95 flex flex-col items-center justify-center p-6 text-center">
+                                <h2 className="text-2xl font-bold text-white mb-1">{gameState === 'bankrupt' ? '파산' : '게임 종료'}</h2>
+                                <p className="text-4xl font-bold text-yellow-400 mb-6">{formatMoney(cash)}</p>
+                                <p className={`text-lg mb-4 font-bold ${currentResult.color}`}>{currentResult.title}</p>
+                                <div className="bg-gray-800 p-4 rounded-lg w-full mb-6 border border-gray-700">
+                                    <p className="text-sm text-gray-300 italic">"{currentResult.desc}"</p>
+                                </div>
+                                <div className="bg-gray-800 p-4 rounded-lg w-full max-w-sm mb-6 border border-gray-700">
+                                    {!scoreSubmitted ? (
+                                        <div className="flex gap-2">
+                                            <input type="text" placeholder="이름 입력" className="flex-1 p-3 bg-gray-900 rounded text-center text-sm border border-gray-600 focus:border-yellow-500 outline-none text-white" value={playerName} onChange={(e) => setPlayerName(e.target.value)} maxLength={8}/>
+                                            <button onClick={submitScore} disabled={!playerName.trim()} className="px-5 bg-yellow-600 hover:bg-yellow-500 rounded text-sm font-bold text-white transition-colors disabled:opacity-50">등록</button>
+                                        </div>
+                                    ) : (
+                                        <div className="text-sm text-left space-y-1 h-32 overflow-y-auto">
+                                            {leaderboard.map((item, idx) => (
+                                                <div key={idx} className="flex justify-between p-2 bg-gray-900 rounded border border-gray-800"><span className="text-gray-300">{idx+1}. {item.name}</span><span className="text-green-400 font-bold">{formatMoney(item.score)}</span></div>
+                                            ))}
+                                        </div>
+                                    )}
+                                </div>
+                                <button onClick={initGame} className="px-8 py-3 bg-gray-700 hover:bg-gray-600 rounded-lg text-white font-bold transition-colors">다시 하기</button>
+                            </div>
+                        )}
+
+                        {/* Chart */}
+                        <div className="p-3 bg-gray-850 rounded-lg border border-gray-700/50">
+                            <div className="flex justify-between text-xs mb-2">
+                                <span className="text-green-400 font-bold flex items-center gap-1"><i className="fa-solid fa-chart-line"></i> 아파트 35평 시세 {formatPrice(marketPrice)}</span>
+                                <span className="text-red-400 font-bold flex items-center gap-1"><i className="fa-solid fa-percent"></i> 대출금리 {marketRate.toFixed(1)}%</span>
+                            </div>
+                            <SmoothLineChart data={history} />
+                        </div>
+
+                        {/* Player Stats */}
+                        <div className="grid grid-cols-2 gap-2 text-sm bg-gray-800 p-3 rounded-lg border border-gray-700">
+                            <div className="flex flex-col items-center border-r border-gray-600">
+                                <span className="text-gray-400 text-xs mb-1"><i className="fa-solid fa-coins"></i> 보유 현금</span>
+                                <span className={`font-bold text-xl ${cash < 0 ? 'text-red-500' : 'text-white'}`}>{formatMoney(cash)}</span>
+                            </div>
+                            <div className="flex flex-col items-center">
+                                <span className="text-gray-400 text-xs mb-1"><i className="fa-solid fa-file-invoice-dollar"></i> 대출 잔액</span>
+                                <span className="font-bold text-xl text-red-400">{formatMoney(activeLoan)}</span>
+                            </div>
+                        </div>
+
+                        {/* Status Card (Compact UI) */}
+                        <div className="bg-gray-800 p-3 rounded-lg border border-gray-700 shadow-md">
+                            {gameState === 'idle' && (
+                                <div className="text-sm space-y-1">
+                                    <div className="flex justify-between font-bold text-yellow-400 border-b border-gray-600 pb-1">
+                                        <span><i className="fa-solid fa-clipboard-list"></i> 신규 사업 계획</span>
+                                        <span>{totalUnits}세대</span>
+                                    </div>
+                                    <div className="flex justify-between"><span>예상 원가:</span> <span>{formatUnitCost(projectCost/totalUnits)}</span></div>
+                                    <div className="flex justify-between"><span>예상분양수익 (이자차감):</span> 
+                                        <span className={(marketPrice*totalUnits - projectCost - (totalLoanAmount * (marketRate/100)/12 * CONSTRUCTION_DURATION)) > 0 ? "text-green-400 font-bold" : "text-red-400 font-bold"}>
+                                            {formatMoney((marketPrice * totalUnits) - projectCost - (totalLoanAmount * (marketRate/100)/12 * CONSTRUCTION_DURATION))}
+                                        </span>
+                                    </div>
+                                </div>
+                            )}
+                            {gameState === 'land_owned' && (
+                                <div className="text-sm space-y-1">
+                                    <div className="flex justify-between font-bold text-blue-400 border-b border-gray-600 pb-1">
+                                        <span><i className="fa-solid fa-flag"></i> 토지 보유 중</span>
+                                        <span>이자 {fixedInterestRate}%</span>
+                                    </div>
+                                    <div className="flex justify-between"><span>손익분기:</span> <span>{formatUnitCost(landCostPerUnit + constCostPerUnit)}</span></div>
+                                    <div className="flex justify-between"><span>예상분양수익 (이자차감):</span> 
+                                        <span className={`font-bold ${(marketPrice * totalUnits - projectCost - (totalLoanAmount * (fixedInterestRate/100)/12 * CONSTRUCTION_DURATION)) > 0 ? 'text-green-400' : 'text-red-500'}`}>
+                                            {formatMoney((marketPrice * totalUnits) - projectCost - (totalLoanAmount * (fixedInterestRate/100)/12 * CONSTRUCTION_DURATION))}
+                                        </span>
+                                    </div>
+                                </div>
+                            )}
+                            {gameState === 'under_construction' && (
+                                <div className="text-sm space-y-1">
+                                    <div className="flex justify-between font-bold text-green-400 border-b border-gray-600 pb-1">
+                                        <span><i className="fa-solid fa-hammer"></i> 분양 진행 중</span>
+                                        <span>분양가 {formatMoney(fixedSalesPrice)}</span>
+                                    </div>
+                                    <ProgressBar current={soldUnits} total={totalUnits} label="분양률" color="bg-gradient-to-r from-blue-500 to-cyan-400" />
+                                    <ProgressBar current={projectMonth} total={CONSTRUCTION_DURATION} label="공정률" color="bg-orange-500" />
+                                    <div className="text-center text-xs text-gray-400 mt-2">
+                                        {salesBoostLeft > 0 ? <span className="text-yellow-400 animate-pulse font-bold">⚡ 조직분양 팀 가동 중!</span> : 
+                                         (marketPrice > fixedSalesPrice ? '🔥 인기 폭발 (시세 상승)' : '❄️ 분양 저조 (시세 하락)')}
+                                    </div>
+                                </div>
+                            )}
+                        </div>
+
+                        {/* Logs */}
+                        <div className="space-y-1 px-1">
+                            {logs.map((log, i) => (
+                                <div key={i} className="text-[11px] text-gray-500 truncate border-b border-gray-800/50 pb-1">{log}</div>
+                            ))}
+                        </div>
+                    </div>
+
+                    {/* Footer Controls */}
+                    <div className="shrink-0 bg-gray-900 p-3 border-t border-gray-700">
+                        {gameState === 'idle' && (
+                            <button onClick={buyLand} className="w-full py-4 bg-blue-600 hover:bg-blue-500 text-white font-bold rounded-lg shadow-lg active:scale-95 transition-all flex justify-between px-6 items-center">
+                                <span className="text-lg"><i className="fa-solid fa-signature"></i> 토지 매입</span>
+                                <span className="text-xs font-normal opacity-80 bg-blue-700 px-2 py-1 rounded">대출 {formatMoney(totalLoanAmount*0.3)}</span>
+                            </button>
+                        )}
+                        {gameState === 'land_owned' && (
+                            <button onClick={startSales} className="w-full py-4 bg-green-600 hover:bg-green-500 text-white font-bold rounded-lg shadow-lg active:scale-95 transition-all flex justify-between px-6 items-center">
+                                <span className="text-lg"><i className="fa-solid fa-bullhorn"></i> 분양 개시</span>
+                                <span className="text-xs font-normal opacity-80 bg-green-700 px-2 py-1 rounded">추가대출 {formatMoney(totalLoanAmount*0.7)}</span>
+                            </button>
+                        )}
+                        {gameState === 'under_construction' && (
+                            <button 
+                                onClick={boostSales} 
+                                disabled={salesBoostLeft > 0}
+                                className={`w-full py-4 rounded-lg font-bold shadow-lg active:scale-95 transition-all flex justify-between px-6 items-center ${salesBoostLeft > 0 ? 'bg-gray-600 text-gray-400 cursor-not-allowed' : 'bg-purple-600 hover:bg-purple-500 text-white'}`}
+                            >
+                                <span className="text-lg"><i className="fa-solid fa-people-group"></i> 조직분양 투입</span>
+                                <span className="text-xs font-normal opacity-80 bg-black/20 px-2 py-1 rounded">비용 {formatMoney(unsoldUnits * 0.1)}</span>
+                            </button>
+                        )}
+                    </div>
+                </div>
+            );
+        };
+
+        const ProgressBar = ({ current, total, color="bg-blue-500", label="" }) => {
+            const percentage = Math.min(100, Math.round((current / total) * 100));
+            return (
+                <div className="w-full mt-2">
+                    <div className="flex justify-between text-xs mb-1 text-gray-400">
+                        <span>{label}</span>
+                        <span className="text-white font-bold">{percentage}%</span>
+                    </div>
+                    <div className="w-full h-4 bg-gray-700 rounded-full overflow-hidden relative shadow-inner">
+                        <div className={`h-full ${color} transition-all duration-300`} style={{ width: `${percentage}%` }}></div>
+                    </div>
+                </div>
+            );
+        };
+
+        const root = ReactDOM.createRoot(document.getElementById('root'));
+        root.render(<RealEstateTycoon />);
+    </script>
+</body>
+</html>
